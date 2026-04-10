@@ -1,0 +1,77 @@
+title: "Spatio-temporal analysis of onchocerciasis mf prevalence data"
+author: "Millicent Opoku"
+date: "10/04/2026"
+output: 
+
+
+## Install and load libraries
+packages <- c("brms", "dplyr", "ggplot2", "patchwork", "ggnewscale", "tidyr", "sf", "terra", "dplyr", "raster")
+
+# Install missing ones
+installed <- packages %in% installed.packages()[, "Package"]
+if (any(!installed)) {
+  install.packages(packages[!installed])
+}
+
+# Load all
+
+lapply(packages, library, character.only = TRUE)
+
+## Load dataframe
+
+df_model <- readRDS("data/df_model.rds")
+
+## Load fitted model
+
+fit_v8   <- readRDS("data/fit_v8.rds")
+new_dat_hist_tz <- expand.grid(
+  year       = seq(1975, 2015, by = 1),
+  OTZ        = unique(df_model$OTZ),
+  ecozone    = "GS",
+  easting_s  = mean(df_model$easting_s,  na.rm = TRUE),
+  northing_s = mean(df_model$northing_s, na.rm = TRUE),
+  ln_pop     = mean(df_model$ln_pop,     na.rm = TRUE),
+  ro_pca     = mean(df_model$ro_pca,     na.rm = TRUE),
+  TCW_wetnes = mean(df_model$TCW_wetnes, na.rm = TRUE),
+  urbanization = "VLDR",
+  Examined   = 133 # median of numbers examined/sampled
+)
+
+## Generate posterior 
+pred_hist_tz <- posterior_epred(
+  fit_v8,
+  newdata          = new_dat_hist_tz,
+  re_formula       = NA,
+  allow_new_levels = TRUE
+)
+
+
+
+## Generating statistics
+
+new_dat_hist_tz <- new_dat_hist_tz %>%
+  mutate(
+    mean_prev   = apply(pred_hist_tz, 2, mean)            / 133,
+    median_prev = apply(pred_hist_tz, 2, median)          / 133,
+    lower_prev  = apply(pred_hist_tz, 2, quantile, 0.025) / 133,
+    upper_prev  = apply(pred_hist_tz, 2, quantile, 0.975) / 133
+  )
+
+## Filter years to generate summary statistics
+
+new_dat_hist_tz %>%
+  filter(year %in% c(1980, 1987, 1990, 1999, 2010, 2015)) %>%
+  mutate(
+    estimate = paste0(
+      round(mean_prev * 100, 1), "% (",
+      round(lower_prev * 100, 1), "–",
+      round(upper_prev * 100, 1), "%)"
+    )
+  ) %>%
+  arrange(desc(mean_prev)) %>% 
+  select(OTZ, year, estimate) %>%   # ← was mean_prev, should be estimate
+  pivot_wider(names_from = year, values_from = estimate) %>%
+  data.frame() %>%
+  write.table(stdout(), sep = "\t", row.names = FALSE, quote = FALSE)
+
+
