@@ -4,7 +4,7 @@ date: "10/04/2026"
 output: 
 
 
-## Install and load libraries
+## Install and load relevant packages
 packages <- c("brms", "dplyr", "ggplot2", "patchwork", "ggnewscale", "tidyr", "sf", "terra", "dplyr", "raster")
 
 # Install missing ones
@@ -13,7 +13,7 @@ if (any(!installed)) {
   install.packages(packages[!installed])
 }
 
-# Load all
+# Load all relevant packages
 
 lapply(packages, library, character.only = TRUE)
 
@@ -24,10 +24,15 @@ df_model <- readRDS("data/df_model.rds")
 ## Load fitted model
 
 fit_v8   <- readRDS("data/fit_v8.rds")
+
+
+### Predicted prevalence by Operational Transmission Zones (OTZ)
+## Transmission zone history grid
+#********this script was adapted for ecozone and urbanization********
 new_dat_hist_tz <- expand.grid(
   year       = seq(1975, 2015, by = 1),
-  OTZ        = unique(df_model$OTZ),
-  ecozone    = "GS",
+  OTZ        = unique(df_model$OTZ), # Change to ecozone or urbanization
+  ecozone    = "GS", # Change to OTZ or urbanization
   easting_s  = mean(df_model$easting_s,  na.rm = TRUE),
   northing_s = mean(df_model$northing_s, na.rm = TRUE),
   ln_pop     = mean(df_model$ln_pop,     na.rm = TRUE),
@@ -45,9 +50,7 @@ pred_hist_tz <- posterior_epred(
   allow_new_levels = TRUE
 )
 
-
-
-## Generating statistics
+## Generating historical statistics
 
 new_dat_hist_tz <- new_dat_hist_tz %>%
   mutate(
@@ -57,8 +60,11 @@ new_dat_hist_tz <- new_dat_hist_tz %>%
     upper_prev  = apply(pred_hist_tz, 2, quantile, 0.975) / 133
   )
 
-## Filter years to generate summary statistics
+## Assign name to period
+new_dat_hist_tz <- new_dat_hist_tz %>%
+  mutate(period = "Historical")
 
+## Filter years and generate summary statistics
 new_dat_hist_tz %>%
   filter(year %in% c(1980, 1987, 1990, 1999, 2010, 2015)) %>%
   mutate(
@@ -75,3 +81,309 @@ new_dat_hist_tz %>%
   write.table(stdout(), sep = "\t", row.names = FALSE, quote = FALSE)
 
 
+###FORECAST: Temporal extrapolation to 2040
+
+## OTZ forecast grid
+new_dat_fore_tz <- expand.grid(
+  year       = seq(2016, 2040, by = 1),
+OTZ = unique(df_model$OTZ),
+urbanization = "VLDR",
+easting_s    = mean(df_model$easting_s,    na.rm = TRUE),
+northing_s   = mean(df_model$northing_s,   na.rm = TRUE),
+ln_pop       = mean(df_model$ln_pop,       na.rm = TRUE),
+ro_pca       = mean(df_model$ro_pca,       na.rm = TRUE),
+TCW_wetnes   = mean(df_model$TCW_wetnes,   na.rm = TRUE),
+ecozone      = "GS",
+Examined     = 133
+)
+
+## OTZ forecast posterior
+pred_fore_tz <- posterior_epred(
+  fit_v8,
+  newdata          = new_dat_fore_tz,
+  re_formula       = NA,
+  allow_new_levels = TRUE
+)
+
+## Genereate forecast statistics
+new_dat_fore_tz <- new_dat_fore_tz %>%
+  mutate(
+    mean_prev   = apply(pred_fore_tz, 2, mean)            / 133,
+    median_prev = apply(pred_fore_tz, 2, median)          / 133,
+    lower_prev  = apply(pred_fore_tz, 2, quantile, 0.025) / 133,
+    upper_prev  = apply(pred_fore_tz, 2, quantile, 0.975) / 133
+  )
+
+## Assign name to period
+new_dat_fore_tz <- new_dat_fore_tz %>%
+  mutate(period = "Projected")
+
+##combine historical predictions and projected prevalence
+new_dat_tz_combined <- bind_rows(new_dat_hist_tz, new_dat_fore_tz)
+
+## Filter years and print summary statistics
+new_dat_tz_combined  %>%
+  filter(year %in% c(1980, 1987, 1990, 1999, 2010, 2015, 2020, 2025, 2030, 2040)) %>%
+  mutate(
+    estimate = paste0(
+      round(mean_prev * 100, 1), "% (",
+      round(lower_prev * 100, 1), "–",
+      round(upper_prev * 100, 1), "%)"
+    )
+  ) %>%
+  arrange(desc(mean_prev)) %>% 
+  select(OTZ, year, estimate) %>%   # ← was mean_prev, should be estimate
+  pivot_wider(names_from = year, values_from = estimate) %>%
+  data.frame() %>%
+  write.table(stdout(), sep = "\t", row.names = FALSE, quote = FALSE)
+
+
+##combine historical predictions and projected prevalence
+new_dat_tz_combined <- bind_rows(new_dat_hist_tz, new_dat_fore_tz)
+
+
+##Define OTZ colours
+OTZ_col <- c(
+  "Black Volta"         = "#1B9E77",
+  "Dayi-Asukawkaw"      = "#D95F02",
+  "Oti-Daka"            = "#7570B3",
+  "Pra-Offin"           = "#E7298A",
+  "Pru-Afram"           = "#66A61E",
+  "Tano-Ankobra"        = "#E6AB02",
+  "White Volta-Kulpawn" = "#A6761D"
+)
+
+##Define ecozone colours
+ecozone_col <- c("Sudan Savanna"         = "#f2e3aa",
+                 "Guinea Savanna"        = "#aab584",
+                 "Transitional Zone"       = "#6d7829",
+                 "Semi-Deciduous Forest" = "#68992f",
+                 "Rain Forest"           = "#204508",
+                 "Coastal Savanna"       = "#f7883e")
+                 
+
+## Assign phase colours
+phase_fills <- c(
+  "Aerial larviciding" = "#F5F5DC",
+  "IVM mobile teams"   = "#E0F0F0",
+  "Annual CDTI"        = "#DCF0DC",
+  "Biannual CDTI"      = "#FFE4E1",
+  "Projected"          = "#F0F0FF"
+)
+
+
+### Shared plot elements for all including OTZ, ecozone and urbanization
+
+##Define phases
+phases_ext <- data.frame(
+  phase = c("Aerial larviciding", "IVM mobile teams",
+            "Annual CDTI", "Biannual CDTI", "Projected"),
+  xmin  = c(1975, 1995, 1999, 2009, 2015),
+  xmax  = c(1995, 1999, 2009, 2015, 2040)
+)
+phase_rects <- list(
+  geom_rect(data = phases_ext,
+            aes(xmin = xmin, xmax = xmax,
+                ymin = 0,    ymax = 100,
+                fill = phase),
+            alpha = 0.08, inherit.aes = FALSE),
+  scale_fill_manual(values = phase_fills,
+                    name   = "Intervention\nphase")
+)
+
+phase_vlines <- geom_vline(
+  xintercept = c(1995, 1999, 2009, 2015),
+  linetype = "dashed", colour = "grey50", linewidth = 0.35
+)
+# Define elimination threshold
+elim_line <- list(
+  geom_hline(yintercept = 1, linetype = "dotted",
+             colour = "red", linewidth = 0.7),
+  annotate("text", x = 1977, y = 3.5,
+           label = "1% elimination threshold",
+           size = 3.5, colour = "red", hjust = 0)
+)
+
+goal_line <- list(
+  geom_vline(xintercept = 2030, linetype = "dotdash",
+             colour = "green", linewidth = 0.7),
+  annotate("text", x = 2029.5, y = 96,
+           label = "2030\ngoal", size = 4.5,
+           colour = "grey30", hjust = 1)
+)
+
+#print intervention lables on plots
+phase_labels <- list(
+  annotate("text", x = 1984,   y = 97,
+           label = "Aerial\nlarviciding",
+           size = 3.5, colour = "grey30", hjust = 0.5),
+  annotate("text", x = 1996.5, y = 97,
+           label = "IVM\nmobile",
+           size = 3.5, colour = "grey30", hjust = 0.5),
+  annotate("text", x = 2003.5, y = 97,
+           label = "Annual\nCDTI",
+           size = 3.5, colour = "grey30", hjust = 0.5),
+  annotate("text", x = 2011.5, y = 97,
+           label = "Biannual\nCDTI",
+           size = 3.5, colour = "grey30", hjust = 0.5),
+  annotate("text", x = 2022,   y = 97,
+           label = "Projected",
+           size = 3.5, colour = "grey30", hjust = 0.5)
+)
+
+shared_scales <- list(
+  scale_x_continuous(breaks = seq(1975, 2040, by = 5),
+                     limits = c(1975, 2040)),
+  scale_y_continuous(
+    labels = function(x) paste0(x, "%"),
+    limits = c(0, 100),
+    expand = c(0, 0)
+  )
+)
+
+
+### Generate plots
+## Define theme
+forecast_theme <- theme_classic(base_size = 16) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 16),
+    plot.subtitle    = element_text(colour = "grey40", size = 12),
+    plot.caption     = element_text(colour = "grey50", size = 11, hjust = 0),
+    axis.title       = element_text(size = 14, face = "bold"),
+    axis.text        = element_text(size = 12),
+    axis.text.x      = element_text(size = 12),
+    axis.text.y      = element_text(size = 12),
+    legend.position  = "right",
+    legend.title     = element_text(face = "bold", size = 12),
+    legend.text      = element_text(size = 11),
+    legend.key.size  = unit(0.6, "cm"),
+    panel.grid.major = element_line(colour = "grey92", linewidth = 0.3),
+    plot.background  = element_rect(fill = "white", colour = NA)
+  )
+
+## Build plot using the theme object
+p_fore_tz <- ggplot() +
+  phase_rects +
+  phase_vlines +
+  new_scale_fill() +
+  new_scale_colour() +
+  geom_ribbon(data = new_dat_tz_combined,
+              aes(x     = year,
+                  ymin  = lower_prev * 100,
+                  ymax  = upper_prev * 100,
+                  fill  = OTZ,
+                  alpha = period),
+              colour = NA) +
+  scale_alpha_manual(values = c("Historical" = 0.15, "Projected" = 0.07),
+                     name   = "Period") +
+  scale_fill_manual(values = OTZ_col,
+                    name   = "Transmission\nzone") +
+  geom_line(data = new_dat_tz_combined,
+            aes(x        = year,
+                y        = mean_prev * 100,
+                colour   = OTZ,
+                linetype = period),
+            linewidth = 0.9) +
+  scale_linetype_manual(values = c("Historical" = "solid",
+                                   "Projected"  = "dashed"),
+                        name   = "Period") +
+  scale_colour_manual(values = OTZ_col,
+                      name   = "Transmission\nzone") +
+  elim_line +
+  goal_line +
+  phase_labels +
+  shared_scales +
+  labs(
+    title    = "By Operational Transmission Zone",
+    subtitle = "Population-level predictions with 95% credible intervals",
+    x        = "Year",
+    y        = "Predicted Prevalence (%)"
+  ) +
+  forecast_theme   # ← reference the object, not define it here
+
+
+
+### Predictions for disttricts
+
+##Regenerate posterior draws for the prediction grid
+# This may take several minutes depending on grid size and draws
+pred_grid <- posterior_epred(
+  fit_v8,
+  newdata          = pred_grid,
+  
+  re_formula       = NA,
+  allow_new_levels = TRUE,
+  sample_new_levels ="gaussian",
+  ndraws           = 1000
+  
+)
+##Adjust crs to match your coordinate system if not already in 32630
+pred_grid_sf <- pred_grid %>%
+  st_as_sf(coords = c("easting", "northing"), crs = 32630)
+
+## Load Ghana shapefile
+ghana_districts <- st_read("data/ghana_districts.shp")
+# Sanity checks
+## check if boundaries overlap
+st_bbox(ghana_districts)
+   #  xmin      ymin      xmax      ymax 
+# 471032.4  523854.8  965101.3 1236683.2 
+st_bbox(pred_grid_sf)
+  # xmin    ymin    xmax    ymax 
+ # 476776  551797  896776 1226797 
+
+## Join districts to prediction grid
+pred_grid_sf <- st_join(pred_grid_sf,
+                        ghana_districts["NAME_2"],
+                        join = st_intersects) %>%
+                        rename(district = NAME_2) # rename NAME_2 to district
+
+#Check if all data points have been assigned districts and there is none missing
+sum(!is.na(pred_grid_sf$district))
+
+
+
+
+
+
+
+
+district_year_combos <- unique(data.frame(
+  district = grid_districts,
+  year     = grid_years
+))
+
+
+# Confirm dimensions
+dim(pred_grid_draws)   # should be (n_draws × 92480)
+# e.g. 4000 × 92480
+
+
+district_prev <- district_year_combos %>%
+  rowwise() %>%
+  mutate(
+    cols       = list(which(grid_districts == district & grid_years == year)),
+    draw_means = list(rowMeans(pred_grid_draws[, cols, drop = FALSE])),
+    mean_prev  = mean(draw_means[[1]])            / 133,
+    lower_prev = quantile(draw_means[[1]], 0.025) / 133,
+    upper_prev = quantile(draw_means[[1]], 0.975) / 133
+  ) %>%
+  select(district, year, mean_prev, lower_prev, upper_prev) %>%
+  ungroup()
+
+
+## print district summaries
+district_prev %>%
+   filter(year %in% c(1975, 1980, 1990, 2000, 2010, 2015, 2025, 2030, 2040)) %>%
+   mutate(
+     estimate = paste0(
+       round(mean_prev * 100, 1), "% (",
+       round(lower_prev * 100, 1), "–",
+       round(upper_prev * 100, 1), "%)"
+     )
+   ) %>%
+   select(district, year, estimate) %>%
+   pivot_wider(names_from = year, values_from = estimate) %>%
+   arrange(desc(`2030`)) %>% #select which year to arrange by
+   data.frame() %>%
+   write.table(stdout(), sep = "\t", row.names = FALSE, quote = FALSE)
