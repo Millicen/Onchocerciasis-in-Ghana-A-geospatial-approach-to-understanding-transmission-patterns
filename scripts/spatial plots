@@ -1,1 +1,19 @@
+title: "Generate spatial grid for data"
+author: "Millicent Opoku"
+date: "10/04/2026"
 
+
+Aim: To generate spatial grid to overlay on Ghana map
+
+
+## InstallLoad and libraries
+packages <- c("brms", "dplyr", "ggplot2", "patchwork", "ggnewscale", "tidyr")
+
+# Install missing ones
+installed <- packages %in% installed.packages()[, "Package"]
+if (any(!installed)) {
+  install.packages(packages[!installed])
+}
+
+# Load all
+lapply(packages, library, character.only = TRUE)
