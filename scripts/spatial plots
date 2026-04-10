@@ -24,7 +24,7 @@ lapply(packages, library, character.only = TRUE)
 
 ##Regenerate posterior draws for the prediction grid
 # This may take several minutes depending on grid size and draws
-pred_grid <- posterior_epred(
+pred_grid_draws <- posterior_epred(
   fit_v8,
   newdata          = pred_grid,
   
@@ -56,41 +56,63 @@ pred_grid_sf <- st_join(pred_grid_sf,
                         rename(district = NAME_2) # rename NAME_2 to district
 
 #Check if all data points have been assigned districts and there is none missing
-sum(!is.na(pred_grid_sf$district))
+sum(!is.na(pred_grid_sf$districts))
+
+## Extract districts
+grid_districts <- pred_grid_sf$district
+
+##Extract years
+grid_years     <- pred_grid_sf$year
+
+## Combine districts and years
+combos <- unique(data.frame(
+   district = grid_districts,
+   year     = grid_years,
+   stringsAsFactors = FALSE
+ ))
+
+## Prepare a results container
+ results <- vector("list", nrow(combos))
+ for (i in seq_len(nrow(combos))) {                         # Loop through each district–year
+   d <- combos$district[i]
+   y <- combos$year[i]
+   
+   cols <- which(grid_districts == d & grid_years == y)      # Identifies relevant grid cells
+   
+   # Average across grid points within district for each draw
+   if (length(cols) == 1) {
+     draw_vals <- pred_grid_draws[, cols]          # 1000 draws         #Extract model predictions for only one grid cell
+   } else {
+     draw_vals <- rowMeans(pred_grid_draws[, cols]) # 1000 spatial means # Extract model predictions for multiple grid cells
+   }
+
+## Generate district-level statistics
+   results[[i]] <- data.frame(
+     district   = d,
+     year       = y,
+     mean_prev  = mean(draw_vals)             / 133,
+     lower_prev = quantile(draw_vals, 0.025)  / 133,
+     upper_prev = quantile(draw_vals, 0.975)  / 133
+  )
+}
+
+## Combine all the results
+district_prev <- bind_rows(results)
+
+## Check for one of the districts
+ district_prev %>%
+   filter(district == "Bole") %>%
+   arrange(year) %>%
+   mutate(estimate = paste0(
+     round(mean_prev * 100, 1), "% (",
+     round(lower_prev * 100, 1), "–",
+     round(upper_prev * 100, 1), "%)"
+   )) %>%
+   select(year, estimate)
 
 
-
-
-
-
-
-
-district_year_combos <- unique(data.frame(
-  district = grid_districts,
-  year     = grid_years
-))
-
-
-# Confirm dimensions
-dim(pred_grid_draws)   # should be (n_draws × 92480)
-# e.g. 4000 × 92480
-
-
-district_prev <- district_year_combos %>%
-  rowwise() %>%
-  mutate(
-    cols       = list(which(grid_districts == district & grid_years == year)),
-    draw_means = list(rowMeans(pred_grid_draws[, cols, drop = FALSE])),
-    mean_prev  = mean(draw_means[[1]])            / 133,
-    lower_prev = quantile(draw_means[[1]], 0.025) / 133,
-    upper_prev = quantile(draw_means[[1]], 0.975) / 133
-  ) %>%
-  select(district, year, mean_prev, lower_prev, upper_prev) %>%
-  ungroup()
-
-
-## print district summaries
-district_prev %>%
+## print all districts summaries to an object
+district_prev <- district_prev %>%
    filter(year %in% c(1975, 1980, 1990, 2000, 2010, 2015, 2025, 2030, 2040)) %>%
    mutate(
      estimate = paste0(
@@ -104,3 +126,7 @@ district_prev %>%
    arrange(desc(`2030`)) %>% #select which year to arrange by
    data.frame() %>%
    write.table(stdout(), sep = "\t", row.names = FALSE, quote = FALSE)
+
+## Save district prevalence file
+write.csv (district_prev, "district_prev.csv")
+
